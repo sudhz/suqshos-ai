@@ -1,6 +1,7 @@
 # This gitignore is a whitelist. Inspired by https://rgbcu.be/blog/gitignore
 
 *
+config.yaml
 
 !.gitignore
 
@@ -10,4 +11,5 @@
 !Dockerfile
 !config-example.yaml
 !docker-compose.yaml
+!render.yaml
 !requirements.txt

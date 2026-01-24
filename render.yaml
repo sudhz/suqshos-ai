@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: llmcord
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python llmcord.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: DEEPINFRA_API_KEY
+        sync: false

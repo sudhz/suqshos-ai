@@ -29,7 +29,10 @@ permissions:
 # LLM settings:
 
 providers:
-  # Remote providers:
+  deepinfra:
+    base_url: https://api.deepinfra.com/v1/openai
+    api_key:
+
   azure-openai:
     base_url: https://<resource name>.openai.azure.com/openai/deployments/<deployment name>
     api_key: 
@@ -71,13 +74,7 @@ providers:
     base_url: http://localhost:8000/v1
 
 models:
-  openai/gpt-5:
-    reasoning_effort: high
-    verbosity: medium
-
-  openrouter/x-ai/grok-4-fast:online:
-
-  ollama/llama4:
+  deepinfra/deepseek-ai/DeepSeek-V3.2:
 
 system_prompt: |
   You are a snarky Discord chatbot. Be informative but harsh.

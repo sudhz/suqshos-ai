@@ -1,8 +1,10 @@
 import asyncio
+from aiohttp import web
 from base64 import b64encode
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
+import os
 from typing import Any, Literal, Optional
 
 import discord
@@ -14,7 +16,7 @@ from openai import AsyncOpenAI
 import yaml
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 
@@ -30,9 +32,36 @@ EDIT_DELAY_SECONDS = 1
 MAX_MESSAGE_NODES = 500
 
 
-def get_config(filename: str = "config.yaml") -> dict[str, Any]:
+def get_config() -> dict[str, Any]:
+    filename = "config.yaml" if os.path.exists("config.yaml") else "config-example.yaml"
     with open(filename, encoding="utf-8") as file:
-        return yaml.safe_load(file)
+        cfg = yaml.safe_load(file)
+
+    if bot_token := os.environ.get("BOT_TOKEN"):
+        cfg["bot_token"] = bot_token
+
+    for provider in cfg.get("providers", {}):
+        env_key = f"{provider.upper().replace('-', '_')}_API_KEY"
+        if api_key := os.environ.get(env_key):
+            cfg["providers"][provider]["api_key"] = api_key
+
+    return cfg
+
+
+async def health_check(request):
+    return web.Response(text="OK")
+
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Health check server running on port {port}")
 
 
 config = get_config()
@@ -336,6 +365,7 @@ async def on_message(new_msg: discord.Message) -> None:
 
 
 async def main() -> None:
+    await start_health_server()
     await discord_bot.start(config["bot_token"])
 
 
