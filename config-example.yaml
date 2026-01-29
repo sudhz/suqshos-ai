@@ -26,6 +26,10 @@ permissions:
     blocked_ids: []
 
 
+# Search settings (Perplexity Sonar API):
+
+perplexity_api_key:
+
 # LLM settings:
 
 providers:

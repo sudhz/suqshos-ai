@@ -9,3 +9,5 @@ services:
         sync: false
       - key: DEEPINFRA_API_KEY
         sync: false
+      - key: PERPLEXITY_API_KEY
+        sync: false

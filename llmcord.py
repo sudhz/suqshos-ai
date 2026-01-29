@@ -8,7 +8,6 @@ import logging
 import os
 from typing import Any, Literal, Optional
 
-from ddgs import DDGS
 import discord
 from discord.app_commands import Choice
 from discord.ext import commands
@@ -52,9 +51,7 @@ SEARCH_TOOL = {
     }
 }
 
-SEARCH_TIMEOUT_SECONDS = 5
-SEARCH_MAX_RESULTS = 5
-SEARCH_MAX_CHARS = 4000
+SEARCH_TIMEOUT_SECONDS = 30
 
 
 def get_config() -> dict[str, Any]:
@@ -70,37 +67,38 @@ def get_config() -> dict[str, Any]:
         if api_key := os.environ.get(env_key):
             cfg["providers"][provider]["api_key"] = api_key
 
+    if perplexity_key := os.environ.get("PERPLEXITY_API_KEY"):
+        cfg["perplexity_api_key"] = perplexity_key
+
     return cfg
 
 
-async def search_web(query: str) -> list[dict]:
-    """Execute web search using DDGS."""
-    def _search():
-        return list(DDGS().text(query, max_results=SEARCH_MAX_RESULTS))
+async def search_web(query: str, httpx_client: httpx.AsyncClient, api_key: str) -> str:
+    """Search the web using Perplexity Sonar API."""
     try:
-        return await asyncio.wait_for(asyncio.to_thread(_search), timeout=SEARCH_TIMEOUT_SECONDS)
-    except (asyncio.TimeoutError, Exception) as e:
-        logging.warning(f"Search failed for '{query}': {e}")
-        return []
+        response = await httpx_client.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": "sonar-pro",
+                "messages": [{"role": "user", "content": query}],
+                "search_recency_filter": "month",
+                "return_citations": True,
+            },
+            timeout=SEARCH_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        data = response.json()
 
+        content = data["choices"][0]["message"]["content"]
+        citations = data.get("citations", [])
+        if citations:
+            content += "\n\nSources:\n" + "\n".join(f"[{i+1}] {url}" for i, url in enumerate(citations))
 
-def format_search_results(results: list[dict]) -> str:
-    """Format search results for LLM consumption, respecting char limit."""
-    if not results:
-        return "No results found."
-    
-    formatted = []
-    total_chars = 0
-    
-    for i, r in enumerate(results, 1):
-        entry = f"{i}. {r.get('title', 'No title')}\n   {r.get('body', '')}\n   URL: {r.get('href', '')}"
-        separator_len = 2 if formatted else 0  # "\n\n" between entries
-        if total_chars + separator_len + len(entry) > SEARCH_MAX_CHARS:
-            break
-        formatted.append(entry)
-        total_chars += separator_len + len(entry)
-    
-    return "\n\n".join(formatted)
+        return content
+    except Exception as e:
+        logging.warning(f"Perplexity search failed for '{query}': {e}")
+        return "Search failed. No results available."
 
 
 async def health_check(request):
@@ -382,15 +380,16 @@ async def on_message(new_msg: discord.Message) -> None:
         if not use_plain_responses:
             await update_embed(f'🔍 Searching: "{truncated_query}"')
 
-        results = await search_web(query)
+        perplexity_key = config.get("perplexity_api_key", "")
+        result = await search_web(query, httpx_client, perplexity_key)
 
         if not use_plain_responses:
-            await update_embed(f"📊 Found {len(results)} result{'s' if len(results) != 1 else ''}, analyzing...")
+            await update_embed("📊 Analyzing results...")
 
         return {
             "role": "tool",
             "tool_call_id": tc["id"],
-            "content": format_search_results(results)
+            "content": result
         }
 
     def accumulate_tool_call(tool_calls_buffer: dict, tc) -> None:
