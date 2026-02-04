@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import logging
 import os
+import signal
 from typing import Any, Literal, Optional
 
 import discord
@@ -105,7 +106,7 @@ async def health_check(request):
     return web.Response(text="OK")
 
 
-async def start_health_server():
+async def start_health_server() -> web.AppRunner:
     app = web.Application()
     app.router.add_get("/", health_check)
     app.router.add_get("/health", health_check)
@@ -115,6 +116,48 @@ async def start_health_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     logging.info(f"Health check server running on port {port}")
+    return runner
+
+
+async def shutdown(runner: Optional[web.AppRunner]) -> None:
+    logging.info("Shutting down...")
+
+    if not discord_bot.is_closed():
+        try:
+            await discord_bot.close()
+        except Exception:
+            logging.exception("Error closing Discord bot")
+
+    try:
+        await httpx_client.aclose()
+    except Exception:
+        logging.exception("Error closing HTTP client")
+
+    if runner:
+        try:
+            await runner.cleanup()
+        except Exception:
+            logging.exception("Error cleaning up health server")
+
+
+def install_signal_handlers(loop: asyncio.AbstractEventLoop, shutdown_event: asyncio.Event) -> None:
+    def request_shutdown(sig: signal.Signals) -> None:
+        logging.info("Received %s, shutting down...", sig.name)
+        shutdown_event.set()
+
+    def request_shutdown_sync(signum, _frame) -> None:
+        try:
+            sig = signal.Signals(signum)
+            logging.info("Received %s, shutting down...", sig.name)
+        except Exception:
+            logging.info("Received signal %s, shutting down...", signum)
+        loop.call_soon_threadsafe(shutdown_event.set)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, request_shutdown, sig)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(sig, request_shutdown_sync)
 
 
 config = get_config()
@@ -539,8 +582,30 @@ async def on_message(new_msg: discord.Message) -> None:
 
 
 async def main() -> None:
-    await start_health_server()
-    await discord_bot.start(config["bot_token"])
+    runner = await start_health_server()
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    install_signal_handlers(loop, shutdown_event)
+
+    bot_task = asyncio.create_task(discord_bot.start(config["bot_token"]), name="discord-bot")
+    shutdown_task = asyncio.create_task(shutdown_event.wait(), name="shutdown-wait")
+
+    await asyncio.wait(
+        {bot_task, shutdown_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    await shutdown(runner)
+
+    shutdown_task.cancel()
+    await asyncio.gather(shutdown_task, return_exceptions=True)
+    await asyncio.gather(bot_task, return_exceptions=True)
+
+    if bot_task.done():
+        exc = bot_task.exception()
+        if exc:
+            raise exc
 
 
 try:
